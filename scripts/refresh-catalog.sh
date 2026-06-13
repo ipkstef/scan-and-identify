@@ -47,7 +47,8 @@ docker run --rm \
 
 echo "==> [2/3] Building catalog (image cache: $IMAGE_CACHE)"
 echo "    Rate: $RATE req/s, concurrency: $CONCURRENCY"
-echo "    Embed step is CPU-bound and takes ~75 min for the full ~110k catalog."
+echo "    Reusing prior embeddings from catalogs/catalog.npz if compatible;"
+echo "    only new products are fetched + embedded (~75 min embed if all-new)."
 docker run --rm \
     --env-file .env \
     -v "$WORK/products.parquet:/work/products.parquet:ro" \
@@ -58,6 +59,7 @@ docker run --rm \
         --products-parquet /work/products.parquet \
         --image-cache /work/cache \
         --out /work/out/catalog.npz \
+        --reuse-existing /work/out/catalog.npz \
         --rate "$RATE" --concurrency "$CONCURRENCY"
 
 echo "==> [3/3] Done"

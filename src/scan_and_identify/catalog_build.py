@@ -373,6 +373,53 @@ def download_only(
     )
 
 
+def _load_reuse_rows(
+    reuse_existing: Path | None,
+) -> dict[int, tuple[np.ndarray, np.uint64]]:
+    """Load ``{pid: (embedding, name_phash)}`` from a prior catalog NPZ for reuse.
+
+    Returns an empty dict (→ full rebuild) when:
+    - ``reuse_existing`` is None,
+    - the file does not exist,
+    - the embedder_spec ``algo_key`` is not the current ``milo1+phash1``,
+    - the NPZ lacks ``name_phashes``.
+    Each skip reason is logged so refresh logs are self-explanatory.
+
+    Arrays are eagerly copied so the file handle can be released before the
+    caller overwrites ``reuse_existing`` (the refresh script passes the same
+    path as both ``out`` and ``reuse_existing``).
+    """
+    if reuse_existing is None:
+        return {}
+    if not reuse_existing.exists():
+        log.info("Reuse source %s does not exist — full rebuild", reuse_existing)
+        return {}
+
+    expected_algo = "milo1+phash1"
+    with np.load(reuse_existing, allow_pickle=False) as data:
+        try:
+            spec = json.loads(str(data["embedder_spec"]))
+        except (KeyError, ValueError):
+            log.info("Reuse source %s has no/unparseable embedder_spec — full rebuild", reuse_existing)
+            return {}
+        if spec.get("algo_key") != expected_algo:
+            log.info(
+                "Reuse source %s algo_key=%r != %r — full rebuild",
+                reuse_existing,
+                spec.get("algo_key"),
+                expected_algo,
+            )
+            return {}
+        if "name_phashes" not in data.files:
+            log.info("Reuse source %s lacks name_phashes — full rebuild", reuse_existing)
+            return {}
+        emb = data["embeddings"].copy()
+        ids = data["card_ids"].copy()
+        phash = data["name_phashes"].copy()
+
+    return {int(ids[i]): (emb[i], np.uint64(phash[i])) for i in range(len(ids))}
+
+
 def build_catalog(
     products_parquet: Path,
     out_path: Path,
@@ -381,6 +428,7 @@ def build_catalog(
     rate: float = 3.0,
     concurrency: int = 4,
     batch_size: int = 256,
+    reuse_existing: Path | None = None,
 ) -> None:
     """Build a TCGplayer-keyed embedding catalog from ``products_parquet``.
 
@@ -390,10 +438,20 @@ def build_catalog(
     Network politeness: at most ``rate`` requests/sec across all workers, cap
     of ``concurrency`` in-flight requests. Default 3 req/s × 4 workers is
     sustainable on Cloudflare-fronted CDNs without abuse detection.
+
+    When ``reuse_existing`` points at a prior catalog NPZ with the same
+    ``algo_key``, embeddings and pHashes for products already present in that
+    NPZ are reused verbatim; only new products are fetched and embedded. A
+    mismatched ``algo_key`` (e.g. after a model bump) is treated as "fall
+    through to full rebuild" — the safe behaviour, since stale embeddings
+    can't be silently mixed with new ones.
     """
     cache = ImageCache(image_cache_dir)
     items = list(products_to_fetch(products_parquet))
     total = len(items)
+    reuse_by_pid = _load_reuse_rows(reuse_existing)
+    if reuse_by_pid:
+        log.info("Reuse source loaded: %d rows available", len(reuse_by_pid))
     log.info(
         "Building catalog from %d products (rate=%.1f req/s, concurrency=%d, batch=%d)",
         total,
@@ -402,53 +460,71 @@ def build_catalog(
         batch_size,
     )
 
-    embedder = NeuralEmbedder()
+    embedder: NeuralEmbedder | None = None
     embeddings: list[np.ndarray] = []
     name_phashes: list[np.uint64] = []
     card_ids: list[str] = []
+    reused = 0
+    embedded = 0
 
     start = time.monotonic()
     for batch_start in range(0, total, batch_size):
         batch = items[batch_start : batch_start + batch_size]
 
-        # Phase 1: collect already-cached images, queue the rest for fetch.
-        in_memory: dict[int, bytes] = {}
-        pending: list[tuple[int, list[str]]] = []
+        # Phase 0: short-circuit pids whose embeddings we already have.
+        to_embed: list[tuple[int, list[str]]] = []
         for pid, urls in batch:
-            cached = cache.get(pid)
-            if cached is not None:
-                in_memory[pid] = cached
+            row = reuse_by_pid.get(pid)
+            if row is not None:
+                emb, phash = row
+                embeddings.append(emb)
+                name_phashes.append(phash)
+                card_ids.append(str(pid))
+                reused += 1
             else:
-                pending.append((pid, urls))
+                to_embed.append((pid, urls))
 
-        # Phase 2: fetch the missing ones (also writes to cache).
-        if pending:
-            fetched = asyncio.run(
-                _download_pending(pending, cache, rate=rate, concurrency=concurrency)
-            )
-            in_memory.update(fetched)
+        if to_embed:
+            # Phase 1: collect already-cached images, queue the rest for fetch.
+            in_memory: dict[int, bytes] = {}
+            pending: list[tuple[int, list[str]]] = []
+            for pid, urls in to_embed:
+                cached = cache.get(pid)
+                if cached is not None:
+                    in_memory[pid] = cached
+                else:
+                    pending.append((pid, urls))
 
-        # Phase 3: preprocess + embed + pHash in batch order. pHash uses a
-        # separate preprocessing path (canonical resize + name-region crop) —
-        # see scan_and_identify.phash. We feed it the raw decoded image, not
-        # Milo's letterboxed 448×448, so the two pipelines stay independent.
-        for pid, _ in batch:
-            content = in_memory.get(pid)
-            if content is None:
-                continue
-            try:
-                img = preprocess(content)
-                raw = Image.open(io.BytesIO(content)).convert("RGB")
-                phash = compute_name_phash(raw)
-            except Exception as e:
-                log.warning("Bad image for product %s: %s", pid, e)
-                continue
-            embeddings.append(embed_one(embedder, img))
-            name_phashes.append(phash)
-            card_ids.append(str(pid))
+            # Phase 2: fetch the missing ones (also writes to cache).
+            if pending:
+                fetched = asyncio.run(
+                    _download_pending(pending, cache, rate=rate, concurrency=concurrency)
+                )
+                in_memory.update(fetched)
+
+            # Phase 3: preprocess + embed + pHash in batch order. Lazy-init the
+            # embedder so a 100%-reuse refresh skips loading the ONNX model.
+            if embedder is None:
+                embedder = NeuralEmbedder()
+            for pid, _ in to_embed:
+                content = in_memory.get(pid)
+                if content is None:
+                    continue
+                try:
+                    img = preprocess(content)
+                    raw = Image.open(io.BytesIO(content)).convert("RGB")
+                    phash = compute_name_phash(raw)
+                except Exception as e:
+                    log.warning("Bad image for product %s: %s", pid, e)
+                    continue
+                embeddings.append(embed_one(embedder, img))
+                name_phashes.append(phash)
+                card_ids.append(str(pid))
+                embedded += 1
 
         _log_progress(batch_start + len(batch), total, start)
 
+    log.info("Embedded %d new products; reused %d from prior catalog", embedded, reused)
     write_catalog_npz(
         out_path,
         card_ids,

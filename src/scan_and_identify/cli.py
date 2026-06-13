@@ -47,6 +47,15 @@ def main(argv: list[str] | None = None) -> int:
         default=256,
         help="Products per download/embed batch (default 256)",
     )
+    build.add_argument(
+        "--reuse-existing",
+        default=None,
+        help=(
+            "Path to a prior catalog NPZ. Embeddings and pHashes for products "
+            "already present in that NPZ are reused verbatim (no fetch, no embed); "
+            "only new products are processed. Mismatched algo_key → full rebuild."
+        ),
+    )
 
     dl = sub.add_parser(
         "download-images", help="Download all product images into the cache without embedding"
@@ -119,6 +128,7 @@ def _build_catalog(args) -> int:
         rate=args.rate,
         concurrency=args.concurrency,
         batch_size=args.batch_size,
+        reuse_existing=Path(args.reuse_existing) if args.reuse_existing else None,
     )
     return 0
 
