@@ -7,3 +7,11 @@ data/image_cache
 .git
 tests
 docs
+
+# Catalog rollback/backup files left next to the live catalog
+# during refreshes — don't bake them into the prod image.
+catalogs/*.bak*
+catalogs/*.old
+catalogs/.backups/
+catalogs/.archive/
+refresh-*.log
