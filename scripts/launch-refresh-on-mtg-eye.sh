@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Launch the catalog refresh on mtg-eye in a detached tmux session.
 #
-# Run from your LOCAL machine. ssh's to mtg-eye, refuses to start if a
-# refresh is already in progress, then kicks off ./scripts/refresh-catalog.sh
-# inside `tmux` with output teed to a host log file.
+# Run from your LOCAL machine. ssh's to mtg-eye, pulls latest code,
+# rebuilds the locally-tagged scan-and-identify:latest image (the one
+# refresh-catalog.sh runs the build CLI inside — distinct from the
+# ghcr.io/ipkstef/scan-and-identify:latest image prod is running on),
+# then launches ./scripts/refresh-catalog.sh inside a detached `tmux`
+# with output teed to a host log file.
 #
 # Detached tmux means: closing your local terminal does NOT kill the build.
 # Attach/detach freely without affecting the run.
@@ -17,7 +20,6 @@
 set -euo pipefail
 
 REMOTE=mtg-eye
-SESSION=catalog-refresh
 
 ssh "$REMOTE" 'bash -s' <<'REMOTE_SCRIPT'
 set -euo pipefail
@@ -25,8 +27,9 @@ set -euo pipefail
 SESSION=catalog-refresh
 CACHE_DIR="$HOME/cv-build/imgs"
 REPO="$HOME/scan-and-identify"
+IMG=scan-and-identify:latest
 
-# --- guards ---------------------------------------------------------------
+# --- pre-flight guards ---------------------------------------------------
 if docker ps --format '{{.Command}}' | grep -q 'build-catalog'; then
     echo "ABORT: a build-catalog container is already running. Inspect with: docker ps" >&2
     docker ps --format 'table {{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}' >&2
@@ -46,7 +49,24 @@ if [ ! -x "$REPO/scripts/refresh-catalog.sh" ]; then
     exit 1
 fi
 
-# --- launch ---------------------------------------------------------------
+# --- sync code + rebuild local refresh-runtime image ---------------------
+# Rebuilds the locally-tagged scan-and-identify:latest. Prod runs on
+# ghcr.io/ipkstef/scan-and-identify:latest (a different image reference)
+# so this does NOT touch the production container.
+cd "$REPO"
+echo "==> git pull"
+git pull --ff-only origin main
+echo
+if docker image inspect "$IMG" >/dev/null 2>&1; then
+    BACKUP="scan-and-identify:pre-refresh-$(date +%Y%m%d-%H%M)"
+    docker tag "$IMG" "$BACKUP"
+    echo "==> Tagged previous $IMG as $BACKUP (rollback: docker tag $BACKUP $IMG)"
+fi
+echo "==> Rebuilding $IMG from $(git rev-parse --short HEAD)"
+docker build -t "$IMG" .
+echo
+
+# --- launch detached tmux ------------------------------------------------
 LOG="$REPO/refresh-$(date +%Y%m%d-%H%M).log"
 echo "Cache dir : $CACHE_DIR (contains $(ls "$CACHE_DIR" | wc -l) files)"
 echo "Log file  : $LOG"
@@ -60,9 +80,8 @@ sleep 2
 echo "--- tmux sessions ---"
 tmux ls
 echo
-echo "Watch live:   ssh -t $(hostname -s 2>/dev/null || echo mtg-eye) tmux attach -t $SESSION"
+echo "Watch live:   ssh -t mtg-eye tmux attach -t $SESSION"
 echo "              (detach without killing: Ctrl-b then d)"
 echo "Tail log:     ssh mtg-eye \"tail -f $LOG\""
-echo "Check still running:"
-echo "              ssh mtg-eye \"docker ps --filter ancestor=scan-and-identify:latest; tmux ls\""
+echo "Check status: ssh mtg-eye \"docker ps --filter ancestor=$IMG; tmux ls\""
 REMOTE_SCRIPT
