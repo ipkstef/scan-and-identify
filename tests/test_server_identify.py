@@ -135,6 +135,8 @@ def test_identify_emits_telemetry_log_line(synthetic_catalog, synthetic_parquets
     assert "gap=" in line
     assert "conf=" in line
     assert "printings=" in line
+    assert "fetch_ms=" in line
+    assert "pipeline_ms=" in line
 
 
 def test_identify_image_fetch_404(synthetic_catalog, synthetic_parquets):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 
 import httpx
@@ -33,7 +34,13 @@ def _candidate_dicts(candidates) -> list[dict]:
 
 
 def _log_identify(
-    *, image_url: str, scan_id: str | None, set_ids: list[int] | None, result: IdentifyResult
+    *,
+    image_url: str,
+    scan_id: str | None,
+    set_ids: list[int] | None,
+    result: IdentifyResult,
+    fetch_ms: float,
+    pipeline_ms: float,
 ) -> None:
     """One grep-friendly line per identify call.
 
@@ -43,6 +50,7 @@ def _log_identify(
         identify scan_id=quill-42 url=https://... card_back=False
                  top_pid=218276 top_score=0.717 gap=0.347 conf=good
                  n_candidates=3 set_ids=[2655] printings=[Normal,Foil]
+                 fetch_ms=87 pipeline_ms=412
 
     Empty / None fields show as ``-`` so the column count stays stable.
     """
@@ -63,7 +71,7 @@ def _log_identify(
     set_ids_str = "[" + ",".join(str(s) for s in set_ids) + "]" if set_ids else "-"
     log.info(
         "identify scan_id=%s url=%s card_back=%s top_pid=%s top_score=%s gap=%s conf=%s "
-        "n_candidates=%d set_ids=%s printings=%s",
+        "n_candidates=%d set_ids=%s printings=%s fetch_ms=%d pipeline_ms=%d",
         scan_id or "-",
         image_url,
         result.is_card_back,
@@ -74,6 +82,8 @@ def _log_identify(
         len(result.candidates),
         set_ids_str,
         printings,
+        round(fetch_ms),
+        round(pipeline_ms),
     )
 
 
@@ -159,10 +169,12 @@ def create_app(state: AppState) -> FastAPI:
 
     @router.post("/identify", response_model=IdentifyResponse)
     async def identify(req: IdentifyRequest) -> dict:
+        t0 = time.perf_counter()
         try:
             image = await fetch_image(req.image_url, client=app.state.http_client)
         except FetchError as e:
             raise HTTPException(status_code=400, detail=f"Could not fetch image: {e}") from e
+        t1 = time.perf_counter()
         try:
             # pipeline.identify is sync (Milo ONNX + numpy + pHash). Offload to a
             # thread so the asyncio event loop stays responsive to other requests.
@@ -177,7 +189,15 @@ def create_app(state: AppState) -> FastAPI:
             )
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
-        _log_identify(image_url=req.image_url, scan_id=None, set_ids=req.set_ids, result=result)
+        t2 = time.perf_counter()
+        _log_identify(
+            image_url=req.image_url,
+            scan_id=None,
+            set_ids=req.set_ids,
+            result=result,
+            fetch_ms=(t1 - t0) * 1000,
+            pipeline_ms=(t2 - t1) * 1000,
+        )
         return {
             "is_card_back": result.is_card_back,
             "confidence": result.confidence,
@@ -187,6 +207,7 @@ def create_app(state: AppState) -> FastAPI:
     @router.post("/identify-batch", response_model=IdentifyBatchResponse)
     async def identify_batch(req: IdentifyBatchRequest) -> dict:
         async def one(item):
+            t0 = time.perf_counter()
             try:
                 image = await fetch_image(item.image_url, client=app.state.http_client)
             except FetchError as e:
@@ -197,6 +218,7 @@ def create_app(state: AppState) -> FastAPI:
                     "candidates": [],
                     "error": f"fetch failed: {e}",
                 }
+            t1 = time.perf_counter()
             try:
                 # See /identify above for the rationale. With N=58 items in a batch
                 # and a 12-worker pool, expect ~5× wall-clock speedup vs serial.
@@ -215,8 +237,14 @@ def create_app(state: AppState) -> FastAPI:
                     "candidates": [],
                     "error": str(e),
                 }
+            t2 = time.perf_counter()
             _log_identify(
-                image_url=item.image_url, scan_id=item.id, set_ids=req.set_ids, result=result
+                image_url=item.image_url,
+                scan_id=item.id,
+                set_ids=req.set_ids,
+                result=result,
+                fetch_ms=(t1 - t0) * 1000,
+                pipeline_ms=(t2 - t1) * 1000,
             )
             return {
                 "id": item.id,
