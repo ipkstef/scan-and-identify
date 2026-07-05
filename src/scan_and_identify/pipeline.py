@@ -18,6 +18,12 @@ Confidence = Literal["good", "fair", "poor"]
 
 PHASH_RERANK_WEIGHT = 0.15  # 15% pHash, 85% embedding (matches predecessor system)
 
+# With rotation_invariant=True, skip the 180° embed when the 0° top score is at
+# least this — a right-side-up card never scores this high upside down, and the
+# second embed roughly doubles per-scan latency. Upside-down cards score well
+# below this at 0°, so they still get the 180° pass.
+ROTATION_EARLY_EXIT_SCORE = 0.5
+
 
 @dataclass(frozen=True)
 class ConfidenceThresholds:
@@ -116,12 +122,14 @@ class IdentifyPipeline:
         store: TCGStore,
         back_rejector: BackRejector,
         confidence_thresholds: ConfidenceThresholds | None = None,
+        rotation_early_exit_score: float = ROTATION_EARLY_EXIT_SCORE,
     ) -> None:
         self._embedder = embedder
         self._index = index
         self._store = store
         self._back = back_rejector
         self._thresholds = confidence_thresholds or DEFAULT_THRESHOLDS
+        self._rotation_early_exit = rotation_early_exit_score
 
     def identify(
         self,
@@ -137,15 +145,20 @@ class IdentifyPipeline:
         img = rgb.resize((448, 448))
 
         if rotation_invariant:
-            rotated = rotate_card_180(img)
             emb_a = np.asarray(self._embedder.embed(img), dtype=np.float32)
-            emb_b = np.asarray(self._embedder.embed(rotated), dtype=np.float32)
             hits_a = self._index.search(emb_a, set_ids=set_ids, top_k=top_k)
-            hits_b = self._index.search(emb_b, set_ids=set_ids, top_k=top_k)
-            if hits_b and (not hits_a or hits_b[0][0] > hits_a[0][0]):
-                emb, hits, used_180 = emb_b, hits_b, True
-            else:
+            if hits_a and hits_a[0][0] >= self._rotation_early_exit:
+                # 0° already decisive — the 180° pass can't beat it, skip the
+                # second embed (the dominant per-scan cost).
                 emb, hits, used_180 = emb_a, hits_a, False
+            else:
+                rotated = rotate_card_180(img)
+                emb_b = np.asarray(self._embedder.embed(rotated), dtype=np.float32)
+                hits_b = self._index.search(emb_b, set_ids=set_ids, top_k=top_k)
+                if hits_b and (not hits_a or hits_b[0][0] > hits_a[0][0]):
+                    emb, hits, used_180 = emb_b, hits_b, True
+                else:
+                    emb, hits, used_180 = emb_a, hits_a, False
         else:
             emb = np.asarray(self._embedder.embed(img), dtype=np.float32)
             hits = self._index.search(emb, set_ids=set_ids, top_k=top_k)

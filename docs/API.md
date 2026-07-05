@@ -70,7 +70,7 @@ more sets.
 | `image_url` | string | required | HTTP(S), reachable from the container, returns an image. |
 | `set_ids` | list[int] \| null | null | Locks candidates to the union of these sets. `[24234]` for one set, `[24234, 23445]` for multiple. 404 if any id is unknown; 422 if empty. |
 | `top_k` | int | 5 | 1–20. |
-| `rotation_invariant` | bool | true | Embeds image + 180° rotation, keeps the better top match. Adds ~50% latency. |
+| `rotation_invariant` | bool | true | Embeds the 180° rotation as well and keeps the better top match — but only when the 0° top score is below the early-exit threshold (0.5), so right-side-up scans pay no extra latency. |
 
 Response:
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 
@@ -76,9 +78,17 @@ def _log_identify(
 
 
 def create_app(state: AppState) -> FastAPI:
-    app = FastAPI(title="scan-and-identify", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        await app.state.http_client.aclose()
+
+    app = FastAPI(title="scan-and-identify", version="0.1.0", lifespan=lifespan)
     auth = require_bearer(state.api_key)
     app.state.deps = state
+    # One pooled client for all image fetches — created here (not in lifespan
+    # startup) so tests that skip the lifespan still get it; closed on shutdown.
+    app.state.http_client = httpx.AsyncClient(timeout=10.0)
 
     @app.exception_handler(HTTPException)
     async def http_exc(_request, exc: HTTPException):
@@ -150,7 +160,7 @@ def create_app(state: AppState) -> FastAPI:
     @router.post("/identify", response_model=IdentifyResponse)
     async def identify(req: IdentifyRequest) -> dict:
         try:
-            image = await fetch_image(req.image_url)
+            image = await fetch_image(req.image_url, client=app.state.http_client)
         except FetchError as e:
             raise HTTPException(status_code=400, detail=f"Could not fetch image: {e}") from e
         try:
@@ -178,7 +188,7 @@ def create_app(state: AppState) -> FastAPI:
     async def identify_batch(req: IdentifyBatchRequest) -> dict:
         async def one(item):
             try:
-                image = await fetch_image(item.image_url)
+                image = await fetch_image(item.image_url, client=app.state.http_client)
             except FetchError as e:
                 return {
                     "id": item.id,

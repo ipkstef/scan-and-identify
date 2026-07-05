@@ -34,8 +34,9 @@ class SetIndex:
         name_phashes: np.ndarray | None = None,
     ) -> SetIndex:
         product_ids = [int(s) for s in catalog.card_ids]
+        products = (store.product(pid) for pid in product_ids)
         group_ids = np.array(
-            [store.product(pid)["group_id"] if store.product(pid) else -1 for pid in product_ids],
+            [p["group_id"] if p else -1 for p in products],
             dtype=np.int64,
         )
 

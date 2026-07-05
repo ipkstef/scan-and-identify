@@ -58,6 +58,57 @@ def test_pipeline_rotation_invariant_does_not_break(synthetic_catalog, synthetic
     assert len(result.candidates) == 3
 
 
+class _CountingEmbedder:
+    """Delegates to the real embedder, counting embed() calls."""
+
+    def __init__(self):
+        self._inner = NeuralEmbedder()
+        self.calls = 0
+
+    def embed(self, images):
+        self.calls += 1
+        return self._inner.embed(images)
+
+
+def _make_counting_pipeline(catalog_path, parquets_path, early_exit_score):
+    catalog = Catalog.load(catalog_path)
+    store = TCGStore.load(parquets_path)
+    index = SetIndex.build(catalog, store)
+    embedder = _CountingEmbedder()
+    pipeline = IdentifyPipeline(
+        embedder=embedder,
+        index=index,
+        store=store,
+        back_rejector=BackRejector(back_embedding=None),
+        rotation_early_exit_score=early_exit_score,
+    )
+    return pipeline, embedder
+
+
+def test_rotation_early_exit_skips_second_embed_when_score_decisive(
+    synthetic_catalog, synthetic_parquets
+):
+    # Threshold 0.0: any 0° top score qualifies, so the 180° pass must be skipped.
+    pipeline, embedder = _make_counting_pipeline(
+        synthetic_catalog, synthetic_parquets, early_exit_score=0.0
+    )
+    img = Image.new("RGB", (448, 448), (200, 50, 50))
+    result = pipeline.identify(img, set_ids=None, top_k=3, rotation_invariant=True)
+    assert embedder.calls == 1
+    assert len(result.candidates) == 3
+
+
+def test_rotation_still_tries_180_when_score_weak(synthetic_catalog, synthetic_parquets):
+    # Threshold above 1.0 can never be met, so both orientations must be embedded.
+    pipeline, embedder = _make_counting_pipeline(
+        synthetic_catalog, synthetic_parquets, early_exit_score=1.1
+    )
+    img = Image.new("RGB", (448, 448), (200, 50, 50))
+    result = pipeline.identify(img, set_ids=None, top_k=3, rotation_invariant=True)
+    assert embedder.calls == 2
+    assert len(result.candidates) == 3
+
+
 def test_pipeline_reranks_by_combined_score(synthetic_catalog, synthetic_parquets):
     """When two candidates are close on embedding but one is much closer on pHash,
     the pHash-similar one wins after rerank.

@@ -1,5 +1,6 @@
 import io
 
+import httpx
 import pytest
 import respx
 from httpx import Response
@@ -32,6 +33,21 @@ async def test_fetch_image_raises_on_non_200():
         m.get(url).mock(return_value=Response(404))
         with pytest.raises(FetchError, match="404"):
             await fetch_image(url)
+
+
+@pytest.mark.asyncio
+async def test_fetch_image_uses_provided_client():
+    # No respx here: if fetch_image ignored the client and built its own,
+    # the request would hit the real network and fail.
+    url = "https://imgs.test/scan.png"
+
+    def handler(_request):
+        return Response(200, content=_png_bytes())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        img = await fetch_image(url, client=client)
+        assert not client.is_closed  # shared client must not be closed by fetch_image
+    assert img.size == (200, 200)
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 import io
 
+import httpx
 import respx
 from fastapi.testclient import TestClient
 from httpx import Response
@@ -149,3 +150,32 @@ def test_identify_image_fetch_404(synthetic_catalog, synthetic_parquets):
         )
     assert r.status_code == 400
     assert "fetch" in r.json()["error"]["message"].lower()
+
+
+def test_identify_uses_apps_shared_http_client(synthetic_catalog, synthetic_parquets):
+    """The route must fetch through app.state.http_client — swap in a MockTransport
+    client (no respx) and confirm the request never hits the real network."""
+    state = AppState.bootstrap_for_tests("k", synthetic_catalog, synthetic_parquets)
+    app = create_app(state)
+
+    def handler(_request):
+        return Response(200, content=_png_bytes())
+
+    app.state.http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = TestClient(app)
+    r = client.post(
+        "/identify",
+        json={"image_url": "https://imgs.test/scan.png", "top_k": 3, "rotation_invariant": False},
+        headers={"Authorization": "Bearer k"},
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()["candidates"]) == 3
+
+
+def test_shared_http_client_closed_on_shutdown(synthetic_catalog, synthetic_parquets):
+    state = AppState.bootstrap_for_tests("k", synthetic_catalog, synthetic_parquets)
+    app = create_app(state)
+    with TestClient(app):
+        shared = app.state.http_client
+        assert not shared.is_closed
+    assert shared.is_closed

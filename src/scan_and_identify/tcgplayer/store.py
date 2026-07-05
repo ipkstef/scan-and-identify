@@ -41,6 +41,7 @@ class TCGStore:
         self._condition_name_to_id = condition_name_to_id
         self._language_name_to_id = language_name_to_id
         self._products_by_id = {int(r.product_id): r for r in products.itertuples(index=False)}
+        self._groups_by_id = {int(r.group_id): r for r in groups.itertuples(index=False)}
         self._skus_by_product: dict[int, list[Any]] = {}
         for r in skus.itertuples(index=False):
             self._skus_by_product.setdefault(int(r.product_id), []).append(r)
@@ -89,14 +90,14 @@ class TCGStore:
         row = self._products_by_id.get(int(product_id))
         if row is None:
             return None
-        group = self._groups[self._groups["group_id"] == row.group_id].iloc[0]
+        group = self._groups_by_id[int(row.group_id)]
         return {
             "product_id": int(row.product_id),
             "name": row.name,
             "clean_name": row.clean_name,
             "group_id": int(row.group_id),
-            "set_name": group["name"],
-            "set_abbr": group["abbr"],
+            "set_name": group.name,
+            "set_abbr": group.abbr,
             "collector_number": None
             if pd.isna(row.collector_number)
             else str(row.collector_number),
