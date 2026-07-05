@@ -27,6 +27,7 @@ from scan_and_identify.server.state import AppState
 from scan_and_identify.tcgplayer.seller_csv import MergePriceConflict, build_seller_csv
 
 log = logging.getLogger("scan_and_identify.identify")
+export_log = logging.getLogger("scan_and_identify.export")
 
 
 def _candidate_dicts(candidates) -> list[dict]:
@@ -294,6 +295,7 @@ def create_app(state: AppState) -> FastAPI:
 
     @router.post("/export/tcgplayer-csv")
     async def export_csv(req: ExportRequest) -> Response:
+        t0 = time.perf_counter()
         rows = [r.model_dump() for r in req.rows]
         formula = req.price_formula.model_dump() if req.price_formula else None
         try:
@@ -314,6 +316,13 @@ def create_app(state: AppState) -> FastAPI:
                     }
                 },
             )
+        export_log.info(
+            "export rows_in=%d rows_out=%d merge_duplicates=%s duration_ms=%d",
+            len(rows),
+            body.count(b"\n") - 1,  # minus header line
+            req.merge_duplicates,
+            round((time.perf_counter() - t0) * 1000),
+        )
         return Response(
             content=body,
             media_type="text/csv",
