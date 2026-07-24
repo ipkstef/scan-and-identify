@@ -10,6 +10,7 @@ from collector_vision import NeuralEmbedder, rotate_card_180
 from PIL import Image
 
 from scan_and_identify.back_rejector import BackRejector
+from scan_and_identify.image_prep import letterbox
 from scan_and_identify.phash import compute_name_phash, hamming_distance
 from scan_and_identify.set_index import SetIndex
 from scan_and_identify.tcgplayer.store import TCGStore
@@ -138,11 +139,13 @@ class IdentifyPipeline:
         top_k: int,
         rotation_invariant: bool,
     ) -> IdentifyResult:
-        # Milo path is unchanged: letterbox to 448×448, embed at 0° (and
-        # optionally 180°), pick the better cosine. Orientation chosen here
-        # is the master signal — the pHash step below mirrors it.
+        # Milo path: letterbox to 448×448 (the SAME transform the catalog was
+        # built with — see image_prep.letterbox), embed at 0° (and optionally
+        # 180°), pick the better cosine. Orientation chosen here is the master
+        # signal — the pHash step below mirrors it. `rgb` (original aspect) is
+        # kept for the pHash path, which does its own canonical resize.
         rgb = image.convert("RGB")
-        img = rgb.resize((448, 448))
+        img = letterbox(rgb)
 
         if rotation_invariant:
             emb_a = np.asarray(self._embedder.embed(img), dtype=np.float32)

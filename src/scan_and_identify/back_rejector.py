@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from scan_and_identify.image_prep import letterbox
+
 
 class BackRejector:
     def __init__(self, back_embedding: np.ndarray | None) -> None:
@@ -20,7 +22,7 @@ class BackRejector:
         """
         if back_image_path is None or not back_image_path.exists():
             return cls(back_embedding=None)
-        img = Image.open(back_image_path).convert("RGB").resize((448, 448))
+        img = letterbox(Image.open(back_image_path))
         emb = np.asarray(embedder.embed(img), dtype=np.float32)
         emb = emb / np.linalg.norm(emb)
         return cls(back_embedding=emb)

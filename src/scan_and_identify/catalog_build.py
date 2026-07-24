@@ -37,6 +37,7 @@ import pandas as pd
 from collector_vision import NeuralEmbedder
 from PIL import Image
 
+from scan_and_identify.image_prep import letterbox
 from scan_and_identify.phash import compute_name_phash
 
 log = logging.getLogger(__name__)
@@ -158,16 +159,11 @@ def preprocess(image_bytes: bytes, size: int = 448) -> Image.Image:
     Letterboxing preserves aspect ratio by adding white bars rather than
     stretching. This matches what the embedder expects — Milo was trained on
     448×448 inputs and ArcFace embeddings degrade when the aspect ratio is
-    distorted.
+    distorted. Shares :func:`image_prep.letterbox` with the query path so the two
+    can never drift.
     """
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    w, h = img.size
-    scale = size / max(w, h)
-    new_w, new_h = int(w * scale), int(h * scale)
-    resized = img.resize((new_w, new_h), Image.LANCZOS)
-    canvas = Image.new("RGB", (size, size), (255, 255, 255))
-    canvas.paste(resized, ((size - new_w) // 2, (size - new_h) // 2))
-    return canvas
+    img = Image.open(io.BytesIO(image_bytes))
+    return letterbox(img, size)
 
 
 def embed_one(embedder: NeuralEmbedder, img: Image.Image) -> np.ndarray:
