@@ -6,7 +6,7 @@ the orchestrators are thin compositions.
 
 Primitives
 ----------
-- :func:`products_to_fetch` — read products.parquet → iter[(product_id, urls)]
+- :func:`products_to_fetch` — read parquet dir → iter[(product_id, urls)], sealed excluded
 - :class:`RateLimiter`      — async token bucket (shared across N workers)
 - :func:`download_image`    — try a list of URLs, return bytes of first success
 - :class:`ImageCache`       — disk-backed cache keyed by product_id
@@ -39,6 +39,7 @@ from PIL import Image
 
 from scan_and_identify.image_prep import letterbox
 from scan_and_identify.phash import compute_name_phash
+from scan_and_identify.tcgplayer.sealed import sealed_product_ids
 
 log = logging.getLogger(__name__)
 
@@ -63,15 +64,21 @@ def tcgplayer_image_urls(product_id: int, image_url_from_parquet: str | None = N
     return urls
 
 
-def products_to_fetch(products_parquet: Path) -> Iterator[tuple[int, list[str]]]:
+def products_to_fetch(parquet_dir: Path) -> Iterator[tuple[int, list[str]]]:
     """Yield ``(product_id, urls)`` for every non-sealed product with an image URL.
 
+    Reads products, skus, and conditions parquets from ``parquet_dir``.
     URLs are ordered best-quality first; consumers should try them in order.
-    Sealed products are excluded because we don't catalog them. Products with no
-    parquet image URL at all are silently skipped — they have no image to fetch.
+    Sealed products (see :func:`sealed_product_ids`) are excluded because we
+    don't catalog them. Products with no parquet image URL at all are silently
+    skipped — they have no image to fetch.
     """
-    df = pd.read_parquet(products_parquet)
-    df = df[df["is_sealed"] == False]  # noqa: E712
+    df = pd.read_parquet(parquet_dir / "products.parquet")
+    sealed = sealed_product_ids(
+        pd.read_parquet(parquet_dir / "skus.parquet", columns=["product_id", "condition_id"]),
+        pd.read_parquet(parquet_dir / "conditions.parquet"),
+    )
+    df = df[~df["product_id"].astype(int).isin(sealed)]
     df = df[df["image_url"].notna()]
     for row in df.itertuples(index=False):
         pid = int(row.product_id)
@@ -309,14 +316,14 @@ def _log_progress(done: int, total: int, start_t: float, suffix: str = "") -> No
 
 
 def download_only(
-    products_parquet: Path,
+    parquet_dir: Path,
     image_cache_dir: Path,
     *,
     rate: float = 10.0,
     concurrency: int = 16,
     batch_size: int = 1024,
 ) -> None:
-    """Populate the image cache for every product in ``products_parquet``.
+    """Populate the image cache for every non-sealed product in ``parquet_dir``.
 
     Already-cached IDs are skipped, so this is resumable: kill it and restart
     with the same ``image_cache_dir`` to continue.
@@ -326,7 +333,7 @@ def download_only(
     want to separate the slow network phase from CPU embedding.
     """
     cache = ImageCache(image_cache_dir)
-    items = list(products_to_fetch(products_parquet))
+    items = list(products_to_fetch(parquet_dir))
     total = len(items)
     log.info(
         "Downloading images for %d products (rate=%.1f req/s, concurrency=%d, batch=%d)",
@@ -396,7 +403,9 @@ def _load_reuse_rows(
         try:
             spec = json.loads(str(data["embedder_spec"]))
         except (KeyError, ValueError):
-            log.info("Reuse source %s has no/unparseable embedder_spec — full rebuild", reuse_existing)
+            log.info(
+                "Reuse source %s has no/unparseable embedder_spec — full rebuild", reuse_existing
+            )
             return {}
         if spec.get("algo_key") != expected_algo:
             log.info(
@@ -417,7 +426,7 @@ def _load_reuse_rows(
 
 
 def build_catalog(
-    products_parquet: Path,
+    parquet_dir: Path,
     out_path: Path,
     image_cache_dir: Path,
     *,
@@ -426,7 +435,7 @@ def build_catalog(
     batch_size: int = 256,
     reuse_existing: Path | None = None,
 ) -> None:
-    """Build a TCGplayer-keyed embedding catalog from ``products_parquet``.
+    """Build a TCGplayer-keyed embedding catalog from the parquets in ``parquet_dir``.
 
     For each product: use cached image if present, else fetch from CDN (within
     rate limit). Then preprocess → embed → accumulate. At the end, write NPZ.
@@ -443,7 +452,7 @@ def build_catalog(
     can't be silently mixed with new ones.
     """
     cache = ImageCache(image_cache_dir)
-    items = list(products_to_fetch(products_parquet))
+    items = list(products_to_fetch(parquet_dir))
     total = len(items)
     reuse_by_pid = _load_reuse_rows(reuse_existing)
     if reuse_by_pid:

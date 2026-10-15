@@ -45,8 +45,9 @@ docker run -d -p 8000:8000 --env-file .env -v $PWD/catalogs:/app/catalogs scan-a
 
 Build a catalog NPZ (one-shot, runs on mtg-eye in practice — see `docs/OPERATIONS.md`):
 ```bash
-scan-and-identify download-images --products-parquet path/to/products.parquet --image-cache /tmp/imgs --rate 40 --concurrency 32
-scan-and-identify build-catalog   --products-parquet path/to/products.parquet --image-cache /tmp/imgs --out catalogs/<file>.npz --rate 40 --concurrency 32
+scan-and-identify pull-catalog-parquets --out-dir /tmp/parquets   # products + skus + conditions
+scan-and-identify download-images --parquet-dir /tmp/parquets --image-cache /tmp/imgs --rate 40 --concurrency 32
+scan-and-identify build-catalog   --parquet-dir /tmp/parquets --image-cache /tmp/imgs --out catalogs/<file>.npz --rate 40 --concurrency 32
 ```
 
 ## Architecture in one paragraph
@@ -61,7 +62,7 @@ A FastAPI app (`server/app.py`) wraps a pipeline (`pipeline.py`) that uses an `I
 - **Errors translated at the route, not raised through.** Modules raise typed errors (`FetchError`, `MergePriceConflict`, `KeyError` from `SetIndex.search`). Routes are the single place that maps each to an `HTTPException` with the right status code. The global `HTTPException` handler in `app.py` formats them as `{"error": {"code": ..., "message": ...}}`.
 - **Fail-fast at boot.** `Config.from_env()` validates required env vars and raises `ConfigError` if anything is missing. A misconfigured container should crash on startup, not 30 seconds into the first request.
 - **Polymorphic catalog IDs.** The engine's `Catalog.card_ids` is stored as `<U36` strings in our NPZ (TCGplayer product_ids stringified). We cast to `int` at the seam (`SetIndex.search`, `pipeline.identify` loop). The engine's other supported format (`(N, 16) uint8` UUID) is not used.
-- **Sealed products are excluded from the catalog.** `catalog_build.build_catalog` filters `is_sealed=False`. `TCGStore.search_products` also excludes sealed. Don't change either without thinking about whether the website wants to find sealed product.
+- **Sealed products are excluded from the catalog.** products.parquet has no sealed flag; a product is sealed iff it has an SKU in the "Unopened" condition (`tcgplayer/sealed.py`, the one place that rule lives). `catalog_build.build_catalog` skips sealed products, and `TCGStore.load` derives an `is_sealed` column so `search_products` also excludes them. Don't change either without thinking about whether the website wants to find sealed product.
 
 ## Test layout
 

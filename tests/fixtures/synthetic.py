@@ -33,13 +33,14 @@ def write_synthetic_parquets(out_dir: Path) -> None:
 
     pd.DataFrame(
         {
-            "condition_id": [1, 2, 3, 4, 5],
+            "condition_id": [1, 2, 3, 4, 5, 6],
             "name": [
                 "Near Mint",
                 "Lightly Played",
                 "Moderately Played",
                 "Heavily Played",
                 "Damaged",
+                "Unopened",
             ],
         }
     ).to_parquet(out_dir / "conditions.parquet")
@@ -61,7 +62,6 @@ def write_synthetic_parquets(out_dir: Path) -> None:
             "group_id": [100, 200],
             "name": ["Test Set Alpha", "Test Set Beta"],
             "abbr": ["TSA", "TSB"],
-            "is_current": [True, False],
         }
     ).to_parquet(out_dir / "groups.parquet")
 
@@ -91,7 +91,6 @@ def write_synthetic_parquets(out_dir: Path) -> None:
                 f"https://www.tcgplayer.com/product/{pid}/"
                 for pid in [1001, 1002, 1003, 2001, 9999]
             ],
-            "is_sealed": [False, False, False, False, True],
             "rarity_id": [1, 2, 3, 1, None],
             "collector_number": ["1", "2", "3", "1", None],
             "subtype": [None, None, None, None, None],
@@ -118,4 +117,19 @@ def write_synthetic_parquets(out_dir: Path) -> None:
                     }
                 )
                 sku_id += 1
+    # Sealed product: sold only in the Unopened condition, which is what marks it sealed.
+    skus.append(
+        {
+            "sku_id": sku_id,
+            "product_id": 9999,
+            "language_id": 1,
+            "printing_id": 1,
+            "condition_id": 6,
+            "low_price_cents": 10000.0,
+            "mid_price_cents": 11000.0,
+            "high_price_cents": 15000.0,
+            "market_price_cents": 12000.0,
+            "direct_low_price_cents": None,
+        }
+    )
     pd.DataFrame(skus).to_parquet(out_dir / "skus.parquet")

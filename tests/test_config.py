@@ -40,7 +40,7 @@ def test_synthetic_fixtures_load(synthetic_parquets, synthetic_catalog):
 
     products = pd.read_parquet(synthetic_parquets / "products.parquet")
     assert len(products) == 5
-    assert products["is_sealed"].sum() == 1
+    assert "is_sealed" not in products.columns  # matches the real R2 schema
 
     data = np.load(synthetic_catalog, allow_pickle=False)
     assert data["embeddings"].shape == (4, 128)

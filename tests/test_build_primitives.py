@@ -60,7 +60,6 @@ def test_urls_dedupe_when_parquet_matches_high_res():
 
 
 def test_products_to_fetch_filters_sealed_and_missing_urls(tmp_path):
-    p = tmp_path / "products.parquet"
     pd.DataFrame(
         {
             "product_id": [1001, 1002, 9999, 1003],
@@ -71,13 +70,32 @@ def test_products_to_fetch_filters_sealed_and_missing_urls(tmp_path):
                 "https://tcgplayer-cdn.tcgplayer.com/product/9999_200w.jpg",
                 None,
             ],
-            "is_sealed": [False, False, True, False],
         }
-    ).to_parquet(p)
+    ).to_parquet(tmp_path / "products.parquet")
+    # 9999 is sealed: its only SKU is Unopened. 1002 has no SKUs at all → not sealed.
+    pd.DataFrame({"product_id": [1001, 1001, 9999, 1003], "condition_id": [1, 2, 6, 1]}).to_parquet(
+        tmp_path / "skus.parquet"
+    )
+    pd.DataFrame(
+        {"condition_id": [1, 2, 6], "name": ["Near Mint", "Lightly Played", "Unopened"]}
+    ).to_parquet(tmp_path / "conditions.parquet")
 
-    out = list(products_to_fetch(p))
+    out = list(products_to_fetch(tmp_path))
     pids = [pid for pid, _ in out]
     assert pids == [1001, 1002]  # sealed and null-URL both excluded
+
+
+def test_products_to_fetch_raises_without_unopened_condition(tmp_path):
+    pd.DataFrame({"product_id": [1001], "image_url": ["u"]}).to_parquet(
+        tmp_path / "products.parquet"
+    )
+    pd.DataFrame({"product_id": [1001], "condition_id": [1]}).to_parquet(tmp_path / "skus.parquet")
+    pd.DataFrame({"condition_id": [1], "name": ["Near Mint"]}).to_parquet(
+        tmp_path / "conditions.parquet"
+    )
+
+    with pytest.raises(ValueError, match="Unopened"):
+        list(products_to_fetch(tmp_path))
 
 
 # --- RateLimiter -----------------------------------------------------------

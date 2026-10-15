@@ -77,7 +77,8 @@ docker compose pull && docker compose up -d
 ```
 
 The script runs inside the existing Docker image. It pulls the latest
-`products.parquet` from R2, downloads any new images (existing cache
+products, skus, and conditions parquets from R2 (skus + conditions decide
+which products are sealed), downloads any new images (existing cache
 reused), re-embeds the full catalog + computes name-region pHashes
 (~75 min CPU, the slow step), and writes `catalogs/catalog.npz`.
 

@@ -72,7 +72,7 @@ All endpoints require `Authorization: Bearer $SCAN_AND_IDENTIFY_API_KEY`.
 | Endpoint | Purpose |
 |---|---|
 | `GET  /health` | Liveness + catalog version + build timestamp |
-| `GET  /sets` | All MTG sets with `is_current` flag |
+| `GET  /sets` | All MTG sets, sorted by name |
 | `GET  /search` | Search products by name/collector_number; powers "Find Match" UI |
 | `POST /identify` | Single image URL → top-K candidates with confidence tier |
 | `POST /identify-batch` | N image URLs → results per image |

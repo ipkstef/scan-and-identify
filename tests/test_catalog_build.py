@@ -17,19 +17,8 @@ def _png(color):
 
 
 def test_build_catalog_filters_sealed_and_writes_npz(tmp_path):
-    products_path = tmp_path / "products.parquet"
-    pd.DataFrame(
-        {
-            "product_id": [1001, 1002, 9999],
-            "group_id": [100, 100, 100],
-            "name": ["A", "B", "Sealed"],
-            "image_url": [
-                f"https://tcgplayer-cdn.tcgplayer.com/product/{p}_200w.jpg"
-                for p in [1001, 1002, 9999]
-            ],
-            "is_sealed": [False, False, True],
-        }
-    ).to_parquet(products_path)
+    parquet_dir = tmp_path / "parquets"
+    _write_parquet_dir(parquet_dir, [1001, 1002, 9999], sealed_ids={9999})
 
     out = tmp_path / "catalog.npz"
     cache = tmp_path / "imgs"
@@ -45,7 +34,7 @@ def test_build_catalog_filters_sealed_and_writes_npz(tmp_path):
         )
         # rate kept high so the test runs fast; concurrency low to keep mock deterministic
         build_catalog(
-            products_parquet=products_path,
+            parquet_dir=parquet_dir,
             out_path=out,
             image_cache_dir=cache,
             rate=100.0,
@@ -64,16 +53,8 @@ def test_build_catalog_filters_sealed_and_writes_npz(tmp_path):
 
 
 def test_build_catalog_skips_already_cached(tmp_path):
-    products_path = tmp_path / "products.parquet"
-    pd.DataFrame(
-        {
-            "product_id": [1001],
-            "group_id": [100],
-            "name": ["A"],
-            "image_url": ["https://tcgplayer-cdn.tcgplayer.com/product/1001_200w.jpg"],
-            "is_sealed": [False],
-        }
-    ).to_parquet(products_path)
+    parquet_dir = tmp_path / "parquets"
+    _write_parquet_dir(parquet_dir, [1001])
     cache = tmp_path / "imgs"
     cache.mkdir()
     (cache / "1001.jpg").write_bytes(_png((50, 50, 50)))
@@ -84,7 +65,7 @@ def test_build_catalog_skips_already_cached(tmp_path):
         m.get(url__regex=r".*").mock(return_value=Response(500))
         out = tmp_path / "catalog.npz"
         build_catalog(
-            products_parquet=products_path,
+            parquet_dir=parquet_dir,
             out_path=out,
             image_cache_dir=cache,
             rate=100.0,
@@ -116,19 +97,28 @@ def _make_existing_npz(path, product_ids, *, algo_key="milo1+phash1"):
     return emb, phash
 
 
-def _write_products_parquet(path, product_ids):
+def _write_parquet_dir(parquet_dir, product_ids, sealed_ids=()):
+    """Write products/skus/conditions parquets. Sealed ids get an Unopened SKU."""
+    parquet_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
         {
             "product_id": product_ids,
             "group_id": [100] * len(product_ids),
             "name": [f"Card {pid}" for pid in product_ids],
             "image_url": [
-                f"https://tcgplayer-cdn.tcgplayer.com/product/{pid}_200w.jpg"
-                for pid in product_ids
+                f"https://tcgplayer-cdn.tcgplayer.com/product/{pid}_200w.jpg" for pid in product_ids
             ],
-            "is_sealed": [False] * len(product_ids),
         }
-    ).to_parquet(path)
+    ).to_parquet(parquet_dir / "products.parquet")
+    pd.DataFrame(
+        {
+            "product_id": product_ids,
+            "condition_id": [6 if pid in sealed_ids else 1 for pid in product_ids],
+        }
+    ).to_parquet(parquet_dir / "skus.parquet")
+    pd.DataFrame({"condition_id": [1, 6], "name": ["Near Mint", "Unopened"]}).to_parquet(
+        parquet_dir / "conditions.parquet"
+    )
 
 
 def test_build_catalog_reuses_all_rows_when_parquet_unchanged(tmp_path):
@@ -136,8 +126,8 @@ def test_build_catalog_reuses_all_rows_when_parquet_unchanged(tmp_path):
     existing = tmp_path / "existing.npz"
     emb_in, phash_in = _make_existing_npz(existing, [1001, 1002, 1003])
 
-    products_path = tmp_path / "products.parquet"
-    _write_products_parquet(products_path, [1001, 1002, 1003])
+    parquet_dir = tmp_path / "parquets"
+    _write_parquet_dir(parquet_dir, [1001, 1002, 1003])
     cache = tmp_path / "imgs"
     out = tmp_path / "catalog.npz"
 
@@ -145,7 +135,7 @@ def test_build_catalog_reuses_all_rows_when_parquet_unchanged(tmp_path):
         # If any HTTP call fires, this 500 would propagate as a failed embed.
         m.get(url__regex=r".*").mock(return_value=Response(500))
         build_catalog(
-            products_parquet=products_path,
+            parquet_dir=parquet_dir,
             out_path=out,
             image_cache_dir=cache,
             reuse_existing=existing,
@@ -169,8 +159,8 @@ def test_build_catalog_embeds_only_new_when_reusing(tmp_path):
     existing = tmp_path / "existing.npz"
     emb_in, phash_in = _make_existing_npz(existing, [1001, 1002])
 
-    products_path = tmp_path / "products.parquet"
-    _write_products_parquet(products_path, [1001, 1002, 1003])
+    parquet_dir = tmp_path / "parquets"
+    _write_parquet_dir(parquet_dir, [1001, 1002, 1003])
     cache = tmp_path / "imgs"
     out = tmp_path / "catalog.npz"
 
@@ -185,7 +175,7 @@ def test_build_catalog_embeds_only_new_when_reusing(tmp_path):
             )
         )
         build_catalog(
-            products_parquet=products_path,
+            parquet_dir=parquet_dir,
             out_path=out,
             image_cache_dir=cache,
             reuse_existing=existing,
@@ -216,8 +206,8 @@ def test_build_catalog_full_rebuild_when_algo_key_mismatches(tmp_path):
     existing = tmp_path / "existing.npz"
     _make_existing_npz(existing, [1001, 1002], algo_key="milo0-legacy")
 
-    products_path = tmp_path / "products.parquet"
-    _write_products_parquet(products_path, [1001, 1002])
+    parquet_dir = tmp_path / "parquets"
+    _write_parquet_dir(parquet_dir, [1001, 1002])
     cache = tmp_path / "imgs"
     out = tmp_path / "catalog.npz"
 
@@ -230,7 +220,7 @@ def test_build_catalog_full_rebuild_when_algo_key_mismatches(tmp_path):
             )
         )
         build_catalog(
-            products_parquet=products_path,
+            parquet_dir=parquet_dir,
             out_path=out,
             image_cache_dir=cache,
             reuse_existing=existing,
@@ -251,14 +241,14 @@ def test_build_catalog_reuses_when_out_path_is_the_reuse_source(tmp_path):
     catalog = tmp_path / "catalog.npz"
     emb_in, phash_in = _make_existing_npz(catalog, [1001, 1002])
 
-    products_path = tmp_path / "products.parquet"
-    _write_products_parquet(products_path, [1001, 1002])
+    parquet_dir = tmp_path / "parquets"
+    _write_parquet_dir(parquet_dir, [1001, 1002])
     cache = tmp_path / "imgs"
 
     with respx.mock(assert_all_called=False) as m:
         m.get(url__regex=r".*").mock(return_value=Response(500))
         build_catalog(
-            products_parquet=products_path,
+            parquet_dir=parquet_dir,
             out_path=catalog,
             image_cache_dir=cache,
             reuse_existing=catalog,

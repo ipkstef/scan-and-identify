@@ -38,7 +38,7 @@ def download_one_parquet(cfg: R2Config, category: int, name: str, dest: Path) ->
 
     Unlike :func:`sync_parquets`, always downloads (no freshness check) and
     writes to an explicit path the caller controls. Used by the
-    ``pull-products-parquet`` CLI for catalog refresh.
+    ``pull-catalog-parquets`` CLI for catalog refresh.
     """
     if name not in PARQUET_NAMES:
         raise ValueError(f"Unknown parquet name {name!r}; expected one of {PARQUET_NAMES}")

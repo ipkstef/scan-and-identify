@@ -38,13 +38,13 @@ hot-reload in v1).
 
 ## `GET /sets`
 
-All TCGplayer sets for the configured category, current sets first.
+All TCGplayer sets for the configured category, sorted by name.
 
 ```json
 {
   "sets": [
-    {"group_id": 24234, "name": "Commander: Tarkir: Dragonstorm", "abbr": "TDC", "is_current": true},
-    {"group_id": 23445, "name": "Commander: Modern Horizons 3", "abbr": "M3C", "is_current": true}
+    {"group_id": 24234, "name": "Commander: Tarkir: Dragonstorm", "abbr": "TDC"},
+    {"group_id": 23445, "name": "Commander: Modern Horizons 3", "abbr": "M3C"}
   ]
 }
 ```

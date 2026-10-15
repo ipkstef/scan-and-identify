@@ -32,7 +32,11 @@ def main(argv: list[str] | None = None) -> int:
 
     build = sub.add_parser("build-catalog", help="Build a TCGplayer-keyed embedding catalog")
     build.add_argument("--category", type=int, default=1)
-    build.add_argument("--products-parquet", required=True)
+    build.add_argument(
+        "--parquet-dir",
+        required=True,
+        help="Directory holding products, skus, and conditions parquets",
+    )
     build.add_argument("--out", required=True)
     build.add_argument("--image-cache", default="data/image_cache")
     build.add_argument(
@@ -60,7 +64,11 @@ def main(argv: list[str] | None = None) -> int:
     dl = sub.add_parser(
         "download-images", help="Download all product images into the cache without embedding"
     )
-    dl.add_argument("--products-parquet", required=True)
+    dl.add_argument(
+        "--parquet-dir",
+        required=True,
+        help="Directory holding products, skus, and conditions parquets",
+    )
     dl.add_argument("--image-cache", default="data/image_cache")
     dl.add_argument(
         "--rate", type=float, default=10.0, help="Max image-CDN requests per second (default 10)"
@@ -73,10 +81,13 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     pull = sub.add_parser(
-        "pull-products-parquet",
-        help="Download products.parquet from R2 to a local path (used during catalog refresh)",
+        "pull-catalog-parquets",
+        help=(
+            "Download the products, skus, and conditions parquets from R2 into a "
+            "directory (used during catalog refresh)"
+        ),
     )
-    pull.add_argument("--out", required=True, help="Destination path for products.parquet")
+    pull.add_argument("--out-dir", required=True, help="Destination directory")
     pull.add_argument(
         "--category", type=int, default=1, help="TCGplayer category id (default 1 = MTG)"
     )
@@ -94,8 +105,8 @@ def main(argv: list[str] | None = None) -> int:
         return _build_catalog(args)
     if args.cmd == "download-images":
         return _download_images(args)
-    if args.cmd == "pull-products-parquet":
-        return _pull_products_parquet(args)
+    if args.cmd == "pull-catalog-parquets":
+        return _pull_catalog_parquets(args)
     return 2
 
 
@@ -122,7 +133,7 @@ def _build_catalog(args) -> int:
     from scan_and_identify.catalog_build import build_catalog
 
     build_catalog(
-        products_parquet=Path(args.products_parquet),
+        parquet_dir=Path(args.parquet_dir),
         out_path=Path(args.out),
         image_cache_dir=Path(args.image_cache),
         rate=args.rate,
@@ -137,7 +148,7 @@ def _download_images(args) -> int:
     from scan_and_identify.catalog_build import download_only
 
     download_only(
-        products_parquet=Path(args.products_parquet),
+        parquet_dir=Path(args.parquet_dir),
         image_cache_dir=Path(args.image_cache),
         rate=args.rate,
         concurrency=args.concurrency,
@@ -146,7 +157,7 @@ def _download_images(args) -> int:
     return 0
 
 
-def _pull_products_parquet(args) -> int:
+def _pull_catalog_parquets(args) -> int:
     load_dotenv(args.env_file)
 
     from scan_and_identify.config import R2Config
@@ -157,7 +168,9 @@ def _pull_products_parquet(args) -> int:
         secret_key=os.environ["R2_TCGPLAYER_BUCKET_SECRET_KEY"],
         endpoint_url=os.environ["R2_TCGPLAYER_URL"],
     )
-    download_one_parquet(cfg, category=args.category, name="products.parquet", dest=Path(args.out))
+    out_dir = Path(args.out_dir)
+    for name in ("products.parquet", "skus.parquet", "conditions.parquet"):
+        download_one_parquet(cfg, category=args.category, name=name, dest=out_dir / name)
     return 0
 
 

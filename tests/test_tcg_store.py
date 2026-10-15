@@ -1,12 +1,11 @@
 from scan_and_identify.tcgplayer.store import TCGStore
 
 
-def test_store_loads_sets_sorted_current_first(synthetic_parquets):
+def test_store_loads_sets_sorted_by_name(synthetic_parquets):
     store = TCGStore.load(synthetic_parquets)
     sets = store.set_list()
     assert [s["abbr"] for s in sets] == ["TSA", "TSB"]
-    assert sets[0]["is_current"] is True
-    assert sets[0]["group_id"] == 100
+    assert sets[0] == {"group_id": 100, "name": "Test Set Alpha", "abbr": "TSA"}
 
 
 def test_store_product_returns_full_row(synthetic_parquets):
@@ -19,6 +18,13 @@ def test_store_product_returns_full_row(synthetic_parquets):
     assert p["rarity"] == "Common"
     assert p["collector_number"] == "1"
     assert p["is_sealed"] is False
+
+
+def test_store_derives_sealed_from_unopened_sku(synthetic_parquets):
+    store = TCGStore.load(synthetic_parquets)
+    assert store.product(9999)["is_sealed"] is True
+    found = [p["product_id"] for p in store.search_products(name="Alpha")]
+    assert found == [1001, 1002, 1003]  # "Alpha Sealed Box" (9999) excluded
 
 
 def test_store_skus_for_product_joins_lookups(synthetic_parquets):

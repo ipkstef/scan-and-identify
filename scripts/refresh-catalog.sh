@@ -38,12 +38,12 @@ if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
     docker build -t "$IMAGE_TAG" .
 fi
 
-echo "==> [1/3] Pulling latest products.parquet from R2"
+echo "==> [1/3] Pulling latest products, skus, conditions parquets from R2"
 docker run --rm \
     --env-file .env \
     -v "$WORK:/work" \
     "$IMAGE_TAG" \
-    scan-and-identify pull-products-parquet --out /work/products.parquet
+    scan-and-identify pull-catalog-parquets --out-dir /work/parquets
 
 echo "==> [2/3] Building catalog (image cache: $IMAGE_CACHE)"
 echo "    Rate: $RATE req/s, concurrency: $CONCURRENCY"
@@ -51,12 +51,12 @@ echo "    Reusing prior embeddings from catalogs/catalog.npz if compatible;"
 echo "    only new products are fetched + embedded (~75 min embed if all-new)."
 docker run --rm \
     --env-file .env \
-    -v "$WORK/products.parquet:/work/products.parquet:ro" \
+    -v "$WORK/parquets:/work/parquets:ro" \
     -v "$IMAGE_CACHE:/work/cache" \
     -v "$(pwd)/catalogs:/work/out" \
     "$IMAGE_TAG" \
     scan-and-identify build-catalog \
-        --products-parquet /work/products.parquet \
+        --parquet-dir /work/parquets \
         --image-cache /work/cache \
         --out /work/out/catalog.npz \
         --reuse-existing /work/out/catalog.npz \

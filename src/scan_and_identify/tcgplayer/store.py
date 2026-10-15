@@ -7,6 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from scan_and_identify.tcgplayer.sealed import sealed_product_ids
+
 
 def _cents_to_dollars(v) -> float | None:
     if v is None or pd.isna(v):
@@ -56,6 +58,9 @@ class TCGStore:
         conditions_df = pd.read_parquet(parquet_dir / "conditions.parquet")
         languages_df = pd.read_parquet(parquet_dir / "languages.parquet")
 
+        sealed = sealed_product_ids(skus, conditions_df)
+        products = products.assign(is_sealed=products["product_id"].astype(int).isin(sealed))
+
         rarities = dict(zip(rarities_df["rarity_id"], rarities_df["name"]))
         printings = dict(zip(printings_df["printing_id"], printings_df["name"]))
         conditions = dict(zip(conditions_df["condition_id"], conditions_df["name"]))
@@ -75,13 +80,12 @@ class TCGStore:
         )
 
     def set_list(self) -> list[dict]:
-        df = self._groups.sort_values(by=["is_current", "name"], ascending=[False, True])
+        df = self._groups.sort_values(by="name")
         return [
             {
                 "group_id": int(r.group_id),
                 "name": r.name,
                 "abbr": r.abbr,
-                "is_current": bool(r.is_current),
             }
             for r in df.itertuples(index=False)
         ]
